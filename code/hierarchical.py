@@ -92,3 +92,122 @@ class HRP:
         sortIx = corr.index[sortIx].tolist()
         hrp = cls.getRecBipart(cov, sortIx)
         return hrp.sort_index()
+
+# class to construct tree clustering from custom sources other than correlation and calculate linkage metrics
+class KnowledgeTree:
+    
+    @classmethod
+    def linkClusters(cls, lnk0,lnk1,items0,items1):
+        # transform partial link1 (based on dist1) into global link0 (based on dist0)
+        nAtoms=len(items0)-lnk0.shape[0]
+        lnk_=lnk1.copy()
+        for i in range(lnk_.shape[0]):
+            i3=0
+            for j in range(2):
+                if lnk_[i,j]<len(items1):
+                    lnk_[i,j]=items0.index(items1[int(lnk_[i,j])])
+                else:
+                    lnk_[i,j]+=-len(items1)+len(items0)
+                # update number of items
+                if lnk_[i,j]<nAtoms:
+                    i3+=1
+                else:
+                    if lnk_[i,j]-nAtoms<lnk0.shape[0]:
+                        i3+=lnk0[int(lnk_[i,j])-nAtoms,3]
+                    else:
+                        i3+=lnk_[int(lnk_[i,j])-len(items0),3]
+            lnk_[i,3]=i3
+        return lnk_
+    
+    @classmethod
+    def updateDist(cls, dist0,lnk0,lnk_,items0,criterion=None):
+        # expand dist0 to incorporate newly created clusters
+        nAtoms=len(items0)-lnk0.shape[0]
+        newItems=items0[-lnk_.shape[0]:]
+        for i in range(lnk_.shape[0]):
+            i0,i1=items0[int(lnk_[i,0])],items0[int(lnk_[i,1])]
+            if criterion is None:
+                if lnk_[i,0]<nAtoms:
+                    w0=1.
+                else:   
+                    w0=lnk0[int(lnk_[i,0])-nAtoms,3]
+                if lnk_[i,1]<nAtoms:
+                    w1=1.
+                else:
+                    w1=lnk0[int(lnk_[i,1])-nAtoms,3]
+                dist1=(dist0[i0]*w0+dist0[i1]*w1)/(w0+w1)
+            else:
+                dist1=criterion(dist0[[i0,i1]],axis=1) # linkage criterion
+            dist0[newItems[i]]=dist1 # add column
+            dist0.loc[newItems[i]]=dist1 # add row
+            dist0.loc[newItems[i],newItems[i]]=0. # main diagonal
+            dist0=dist0.drop([i0,i1],axis=0)
+            dist0=dist0.drop([i0,i1],axis=1)
+        return dist0
+
+    @classmethod
+    def getLinkage_hrp(cls, tree, corr):
+        if len(np.unique(tree.iloc[:,-1]))>1:
+            tree['All']=0 # add top level
+        lnk0=np.empty(shape=(0,4))
+        lvls=[[tree.columns[i-1],tree.columns[i]] for i in range(1,tree.shape[1])]
+        dist0=((1-corr)/2.)**.5 # distance matrix
+        items0=dist0.index.tolist() # map lnk0 to dist0
+        for cols in lvls:
+            grps=tree[cols].drop_duplicates(cols[0]).set_index(cols[0]).groupby(cols[1])
+            
+            for cat,items1 in grps:
+                items1=items1.index.tolist()
+                if len(items1)==1: # single item: rename
+                    items0[items0.index(items1[0])]=cat
+                    dist0=dist0.rename({items1[0]:cat},axis=0)
+                    dist0=dist0.rename({items1[0]:cat},axis=1)
+                    continue
+                dist1=dist0.loc[items1,items1]
+    
+                lnk1=sch.linkage(ssd.squareform(dist1,force='tovector',
+                                                checks=(not np.allclose(dist1,dist1.T))),
+                                                optimal_ordering=True) # cluster that cat
+                lnk_=cls.linkClusters(lnk0,lnk1,items0,items1)
+                lnk0=np.append(lnk0,lnk_,axis=0)
+                items0+=range(len(items0),len(items0)+len(lnk_))
+                dist0=cls.updateDist(dist0,lnk0,lnk_,items0)
+                # Rename last cluster for next level
+                items0[-1]=cat
+                dist0.columns=dist0.columns[:-1].tolist()+[cat]
+                dist0.index=dist0.columns
+        
+        lnk0=np.array([tuple(i) for i in lnk0],dtype=[('i0',int),('i1',int), \
+                      ('dist',float),('num',int)])    
+        return lnk0
+
+    @classmethod
+    def getAtoms(cls, lnk,item):
+        # get all atoms included in an item
+        anc=[item]
+        while True:
+            item_=max(anc)
+            if item_<=lnk.shape[0]:
+                break
+            else:
+                anc.remove(item_)
+                anc.append(lnk['i0'][item_-lnk.shape[0]-1])
+                anc.append(lnk['i1'][item_-lnk.shape[0]-1])
+        return anc
+    @classmethod
+    def link2corr(cls, lnk, lbls):
+        # derive the correl matrix associated with a given linkage matrix
+        corr=pd.DataFrame(np.eye(lnk.shape[0]+1),index=lbls,columns=lbls,
+                          dtype=float)
+        for i in range(lnk.shape[0]):
+            x=cls.getAtoms(lnk,lnk['i0'][i])
+            y=cls.getAtoms(lnk,lnk['i1'][i])
+            corr.loc[lbls[x],lbls[y]]=1-2*lnk['dist'][i]**2 # off-diagonal values
+            corr.loc[lbls[y],lbls[x]]=1-2*lnk['dist'][i]**2 # symmetry
+        return corr
+    
+    @classmethod
+    def get_corr_hrp(cls,tree, corr):
+        link = cls.getLinkage_hrp(tree, corr)
+        corr_ = cls.link2corr(link, corr.index)
+        return corr_, link
