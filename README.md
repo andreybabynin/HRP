@@ -7,3 +7,4 @@ based on Marcos Lopez de Prado papers:
 * [Building Diversified Portfolios that Outperform Out-of-Sample](https://papers.ssrn.com/sol3/papers.cfm?abstract_id=2708678)
 * [A Robust Estimator of the Efficient Frontier](https://papers.ssrn.com/sol3/papers.cfm?abstract_id=3469961)
 
+My [Medium post](https://medium.com/@andreybabynin/hierarchical-risk-parity-in-portfolio-construction-fc368db18c78) on the subject.
